@@ -170,6 +170,15 @@
     box-shadow: 0 10px 30px rgba(0,0,0,.5);
   }
   #clearPanel h2 { color: #fff36b; }
+
+  /* 게임 앞 소개 영상 */
+  #introScreen { z-index: 20; padding: 0; background: #1a1030; }
+  #introFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+  #introSkip {
+    position: absolute; right: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 2;
+    padding: 10px 16px; border-radius: 999px; background: rgba(255,255,255,.25);
+    font-size: 15px; font-weight: 800;
+  }
 </style>
 </head>
 <body>
@@ -202,6 +211,11 @@
   </div>
   <p class="howto">← → 키 · 아래 버튼 · 화면 끌기로 집게 이동<br>스페이스 · ↓ 키 · 뽑기 버튼으로 뽑기!</p>
   <button id="startBtn" class="big" type="button">시작하기</button>
+</div>
+
+<div id="introScreen" class="screen">
+  <iframe id="introFrame" title="게임 소개 영상"></iframe>
+  <button id="introSkip" type="button">건너뛰기</button>
 </div>
 
 <div id="overScreen" class="screen">
@@ -1207,10 +1221,40 @@
   $('startBtn').addEventListener('click', startGame);
   document.querySelectorAll('.replay').forEach(b => b.addEventListener('click', restart));
 
+  // ---------- 게임 앞 소개 영상 (intro.html) ----------
+  // 소개가 끝나거나, '지금 플레이'·건너뛰기를 누르면 시작 화면이 보임
+  // 주소 끝이 #play 이면 소개 없이 바로 시작 화면
+  const introScreen = $('introScreen'), introFrame = $('introFrame');
+  let introOn = false, introTimer = 0;
+  function closeIntro() {
+    if (!introOn) return;
+    introOn = false;
+    clearTimeout(introTimer);
+    introScreen.classList.remove('show');
+    introFrame.src = 'about:blank';
+  }
+  if (location.hash !== '#play') {
+    introOn = true;
+    introScreen.classList.add('show');
+    introFrame.addEventListener('load', () => {
+      if (!introOn) return;
+      clearTimeout(introTimer);
+      introTimer = setTimeout(closeIntro, 12000);   // 10초 영상 + 마지막 장면 잠깐
+    });
+    introTimer = setTimeout(closeIntro, 20000);     // 소개 파일을 못 불러와도 넘어감
+    introFrame.src = 'intro.html';
+  }
+  window.addEventListener('message', e => { if (e.data === 'intro-done') closeIntro(); });
+  $('introSkip').addEventListener('click', closeIntro);
+
   // ---------- 조작 ----------
   window.addEventListener('keydown', e => {
     const k = e.key;
     if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowUp' || k === ' ' || k === 'Spacebar') e.preventDefault();
+    if (introOn) {
+      if (k === ' ' || k === 'Enter') closeIntro();
+      return;
+    }
     if (mode === 'title') {
       if (k === ' ' || k === 'Enter') startGame();
       return;

@@ -586,10 +586,17 @@
   const m = /t=([\d.]+)/.exec(location.hash);
   if (m) start -= parseFloat(m[1]) * 1000;
 
+  // 게임(index.html) 안에서 보여 줄 때는 게임에 알리고, 따로 열었을 때는 게임으로 이동
+  const embedded = window.parent !== window;
+  function goPlay() {
+    if (embedded) window.parent.postMessage('intro-done', '*');
+    else location.href = 'index.html#play';
+  }
+
   function frame(now) {
     const t = (now - start) / 1000;
     render(t);
-    replayBtn.hidden = t < DURATION;
+    replayBtn.hidden = embedded || t < DURATION;
     cv.style.cursor = t >= 6.8 ? 'pointer' : 'default';
     requestAnimationFrame(frame);
   }
@@ -602,7 +609,13 @@
     if (t < 6.8) return;
     const r = cv.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
-    if (Math.abs(x - PLAY.x) < PLAY.w / 2 && Math.abs(y - PLAY.y) < PLAY.h / 2) location.href = 'index.html';
+    if (Math.abs(x - PLAY.x) < PLAY.w / 2 && Math.abs(y - PLAY.y) < PLAY.h / 2) goPlay();
+  });
+  window.addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      goPlay();
+    }
   });
   document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 })();
