@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>동물 인형뽑기 - 소개</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+  body {
+    position: fixed; inset: 0;
+    background: #1a1030;
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  }
+  #film { display: block; border-radius: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.5); cursor: default; }
+  #replayBtn {
+    position: fixed; right: 14px; top: calc(14px + env(safe-area-inset-top));
+    border: none; border-radius: 999px; padding: 9px 16px;
+    background: rgba(255,255,255,.22); color: #fff;
+    font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="film"></canvas>
+<button id="replayBtn" type="button" hidden>다시 보기</button>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- 기본 설정 (세로 9:16 화면, 10초) ----------
+  const W = 360, H = 640, DURATION = 10;
+  const MX = 40, MY = 185, MW = 280, MH = 360;           // 기계 몸체
+  const IX = 56, IY = 222, IW = 248, FLOOR_Y = 515;       // 기계 안쪽
+  const RAIL_Y = 234, PIVOT_X = 180;
+  const DOLL_R = 17, DOLL_Y = FLOOR_Y - DOLL_R;
+  const ORDER = ['bear', 'cat', 'dog', 'rabbit', 'pig', 'chick', 'penguin'];
+  const TARGET = 3;                                       // 가운데 토끼를 뽑음
+  const L_REST = 40, L_GRAB = DOLL_Y - 26 - DOLL_R * 0.5 - RAIL_Y, L_TOP = 60;
+  const TITLE = '동물 인형뽑기';
+  const FONT = '"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif';
+
+  const cv = document.getElementById('film'), ctx = cv.getContext('2d');
+  const replayBtn = document.getElementById('replayBtn');
+
+  // ---------- 도움 함수 ----------
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const prog = (t, start, dur) => clamp01((t - start) / dur);
+  function easeOutBack(k) { const c = 1.9; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); }
+  function easeInOut(k) { return k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; }
+  function easeOutBounce(k) {
+    const n = 7.5625, d = 2.75;
+    if (k < 1 / d) return n * k * k;
+    if (k < 2 / d) return n * (k -= 1.5 / d) * k + 0.75;
+    if (k < 2.5 / d) return n * (k -= 2.25 / d) * k + 0.9375;
+    return n * (k -= 2.625 / d) * k + 0.984375;
+  }
+  function rr(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  // ---------- 인형 그리기 (게임과 같은 모양) ----------
+  function blob(g, x, y, rx, ry, fill, rot, noStroke) {
+    g.beginPath();
+    g.ellipse(x, y, rx, ry, rot || 0, 0, Math.PI * 2);
+    g.fillStyle = fill;
+    g.fill();
+    if (!noStroke) g.stroke();
+  }
+  function poly(g, pts, fill, noStroke) {
+    g.beginPath();
+    g.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]);
+    g.closePath();
+    g.fillStyle = fill;
+    g.fill();
+    if (!noStroke) g.stroke();
+  }
+  function line(g, pts, color, w) {
+    g.save();
+    g.beginPath();
+    g.moveTo(pts[0], pts[1]);
+    for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]);
+    g.strokeStyle = color;
+    g.lineWidth = w;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.stroke();
+    g.restore();
+  }
+  function eyes(g, y, dx) {
+    for (const s of [-1, 1]) {
+      blob(g, s * dx, y, 2.2, 2.6, '#222', 0, true);
+      blob(g, s * dx + 0.7, y - 0.9, 0.8, 0.8, '#fff', 0, true);
+    }
+  }
+  function cheeks(g, y, dx, color) {
+    g.save();
+    g.globalAlpha = 0.55;
+    blob(g, -dx, y, 3, 2, color, 0, true);
+    blob(g, dx, y, 3, 2, color, 0, true);
+    g.restore();
+  }
+  function star(g, x, y, r, fill) {
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, rr2 = i % 2 ? r * 0.45 : r;
+      g.lineTo(x + Math.cos(a) * rr2, y + Math.sin(a) * rr2);
+    }
+    g.closePath();
+    g.fillStyle = fill;
+    g.fill();
+  }
+
+  const DRAW = {
+    rabbit(g) {
+      const c = '#fbf6ef', p = '#f4a6bd';
+      for (const s of [-1, 1]) {
+        blob(g, s * 6, -24, 4.8, 12, c, s * 0.18);
+        blob(g, s * 6, -23, 2.4, 8.5, p, s * 0.18, true);
+      }
+      blob(g, 0, 11, 14, 11, c);
+      blob(g, 0, 12, 7, 6.5, '#fff', 0, true);
+      blob(g, -7, 20, 5, 3.5, c);
+      blob(g, 7, 20, 5, 3.5, c);
+      blob(g, 0, -5, 15, 13.5, c);
+      eyes(g, -7, 5.5);
+      cheeks(g, -1, 9.5, '#f78fa8');
+      poly(g, [-2, -2.5, 2, -2.5, 0, 0], '#f27a9b', true);
+      line(g, [0, 0, 0, 1.5, -2.2, 3], '#a0616f', 0.9);
+      line(g, [0, 1.5, 2.2, 3], '#a0616f', 0.9);
+    },
+    bear(g) {
+      const c = '#a9713f', l = '#e6c49a';
+      for (const s of [-1, 1]) {
+        blob(g, s * 11, -15, 6, 6, c);
+        blob(g, s * 11, -15, 3.3, 3.3, l, 0, true);
+      }
+      blob(g, 0, 11, 14, 11, c);
+      blob(g, 0, 12, 8, 7, l, 0, true);
+      blob(g, -12, 8, 4, 6, c, 0.5);
+      blob(g, 12, 8, 4, 6, c, -0.5);
+      blob(g, 0, -4, 15, 13, c);
+      blob(g, 0, 1, 7, 5.2, l);
+      blob(g, 0, -0.8, 2.8, 2, '#3a2414', 0, true);
+      line(g, [0, 1, 0, 3, -2, 4.2], '#3a2414', 0.9);
+      line(g, [0, 3, 2, 4.2], '#3a2414', 0.9);
+      eyes(g, -6.5, 5.5);
+    },
+    cat(g) {
+      const c = '#f3a55b', d = '#c8752f';
+      line(g, [9, 16, 19, 12, 20, 3, 16, -1], d, 5);
+      line(g, [9, 16, 19, 12, 20, 3, 16, -1], c, 3);
+      blob(g, 0, 11, 13.5, 11, c);
+      blob(g, -6, 20, 4.5, 3, '#fff');
+      blob(g, 6, 20, 4.5, 3, '#fff');
+      for (const s of [-1, 1]) {
+        poly(g, [s * 14, -9, s * 12.5, -25, s * 3, -16], c);
+        poly(g, [s * 11.8, -12, s * 11.3, -21, s * 6, -15.5], '#f7a7b8', true);
+      }
+      blob(g, 0, -4, 15.5, 13, c);
+      line(g, [0, -16.5, 0, -12], d, 1.8);
+      line(g, [-4, -16, -3.5, -12.5], d, 1.8);
+      line(g, [4, -16, 3.5, -12.5], d, 1.8);
+      blob(g, 0, 2, 5.5, 3.6, '#fff3e6', 0, true);
+      for (const s of [-1, 1]) {
+        blob(g, s * 6, -5, 2.8, 3.2, '#5cbf5f', 0, true);
+        blob(g, s * 6, -5, 0.9, 2.6, '#111', 0, true);
+        line(g, [s * 5, 1, s * 15, -1], '#6b4a2c', 0.7);
+        line(g, [s * 5, 2.6, s * 15, 3], '#6b4a2c', 0.7);
+        line(g, [s * 5, 4, s * 14, 6.5], '#6b4a2c', 0.7);
+      }
+      poly(g, [-1.8, 0, 1.8, 0, 0, 2], '#f27a9b', true);
+    },
+    dog(g) {
+      const c = '#f2ddb6', b = '#8b5a33';
+      blob(g, 14, 8, 3, 6.5, b, 0.6);
+      blob(g, 0, 11, 14, 11, c);
+      blob(g, 5, 13, 4, 3, b, 0, true);
+      blob(g, 0, -4, 15, 13.5, c);
+      blob(g, 6, -6, 5, 4.5, b, 0, true);
+      blob(g, -14, -4, 5, 10.5, b, 0.35);
+      blob(g, 14, -4, 5, 10.5, b, -0.35);
+      blob(g, 0, 2, 6.5, 4.8, '#fff8ec');
+      blob(g, 0, 6.4, 2, 2.6, '#f06b7d', 0, true);
+      blob(g, 0, 0, 3.2, 2.3, '#222', 0, true);
+      line(g, [0, 2, 0, 3.6, -2.4, 4.6], '#222', 0.9);
+      line(g, [0, 3.6, 2.4, 4.6], '#222', 0.9);
+      eyes(g, -6, 5.5);
+    },
+    pig(g) {
+      const c = '#f8b4c6', d = '#ec8aa6';
+      line(g, [12, 13, 17, 11, 18, 15, 15, 16, 16, 12], d, 1.6);
+      blob(g, 0, 11, 14, 11, c);
+      blob(g, -7, 20, 4, 3, d);
+      blob(g, 7, 20, 4, 3, d);
+      for (const s of [-1, 1]) poly(g, [s * 13, -10, s * 15.5, -22, s * 5, -16], d);
+      blob(g, 0, -4, 15.5, 13, c);
+      blob(g, 0, 2, 6.8, 4.6, d);
+      blob(g, -2.3, 2, 1.1, 1.7, '#a24a63', 0, true);
+      blob(g, 2.3, 2, 1.1, 1.7, '#a24a63', 0, true);
+      eyes(g, -7.5, 6);
+      cheeks(g, 0, 11, '#f0628a');
+    },
+    chick(g) {
+      const c = '#ffd84a', o = '#ff9a1f';
+      line(g, [-5, 19, -5, 23, -7.5, 24.5], o, 1.6);
+      line(g, [-5, 23, -2.5, 24.5], o, 1.6);
+      line(g, [5, 19, 5, 23, 2.5, 24.5], o, 1.6);
+      line(g, [5, 23, 7.5, 24.5], o, 1.6);
+      blob(g, 0, 8, 15, 12.5, c);
+      blob(g, -14, 9, 4, 7, '#f4c22d', 0.5);
+      blob(g, 14, 9, 4, 7, '#f4c22d', -0.5);
+      blob(g, 0, -7, 12.5, 11.5, c);
+      blob(g, 0, -20, 1.6, 3.6, c, 0);
+      blob(g, -3, -19, 1.4, 3, c, -0.6);
+      blob(g, 3, -19, 1.4, 3, c, 0.6);
+      eyes(g, -9, 4.5);
+      poly(g, [-3.5, -4.5, 0, -7, 3.5, -4.5, 0, -1.5], o);
+      line(g, [-3.2, -4.5, 3.2, -4.5], '#c46a00', 0.7);
+      cheeks(g, -4, 8, '#ff8f6b');
+    },
+    penguin(g) {
+      const k = '#26304a', w = '#fff', o = '#ffa21f';
+      blob(g, -6, 21, 5, 2.8, o);
+      blob(g, 6, 21, 5, 2.8, o);
+      blob(g, -14, 8, 4, 9, k, 0.4);
+      blob(g, 14, 8, 4, 9, k, -0.4);
+      blob(g, 0, 9, 14, 13, k);
+      blob(g, 0, 11, 9.5, 9.5, w, 0, true);
+      blob(g, 0, -6, 14, 12.5, k);
+      blob(g, -4.8, -5, 6.5, 7, w, 0, true);
+      blob(g, 4.8, -5, 6.5, 7, w, 0, true);
+      eyes(g, -6, 4.5);
+      poly(g, [-3, -1.5, 3, -1.5, 0, 2.5], o);
+      cheeks(g, -1.5, 8, '#ff8fb0');
+      poly(g, [0, 3.8, -5, 1.5, -5, 6.5], '#e8344e');
+      poly(g, [0, 3.8, 5, 1.5, 5, 6.5], '#e8344e');
+      g.save();
+      g.strokeStyle = 'rgba(150,100,0,.6)';
+      star(g, 13, -17, 5.5, '#ffd700');
+      g.stroke();
+      g.restore();
+    }
+  };
+  function drawDoll(type, x, y, r, rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (rot) ctx.rotate(rot);
+    ctx.scale(r / 22, r / 22);
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = 'rgba(60,30,40,.4)';
+    DRAW[type](ctx);
+    ctx.restore();
+  }
+
+  // ---------- 장면 요소 ----------
+  const sparkles = [];
+  for (let i = 0; i < 34; i++) {
+    sparkles.push({ x: Math.random() * W, y: Math.random() * H, r: 1.5 + Math.random() * 3, ph: Math.random() * 6.28, sp: 1.5 + Math.random() * 2.5 });
+  }
+
+  function drawBackground(t) {
+    const gr = ctx.createRadialGradient(W / 2, 140, 20, W / 2, 320, 520);
+    gr.addColorStop(0, '#7b3fd1');
+    gr.addColorStop(0.55, '#3d1f7a');
+    gr.addColorStop(1, '#1a1030');
+    ctx.fillStyle = gr;
+    ctx.fillRect(0, 0, W, H);
+
+    // 제목 뒤에서 도는 빛줄기
+    ctx.save();
+    ctx.translate(W / 2, 112);
+    ctx.rotate(t * 0.25);
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    for (let i = 0; i < 12; i++) {
+      ctx.rotate(Math.PI / 6);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-40, -520);
+      ctx.lineTo(40, -520);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    for (const s of sparkles) {
+      ctx.globalAlpha = 0.25 + 0.75 * Math.abs(Math.sin(t * s.sp + s.ph));
+      star(ctx, s.x, (s.y - t * 8 + H) % H, s.r, '#fff7c2');
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawTitle(t) {
+    ctx.font = '900 50px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const chars = Array.from(TITLE);
+    const widths = chars.map(c => c === ' ' ? 14 : ctx.measureText(c).width);
+    const total = widths.reduce((a, b) => a + b, 0);
+    let x = W / 2 - total / 2;
+    chars.forEach((c, i) => {
+      const w = widths[i];
+      const cx = x + w / 2;
+      x += w;
+      if (c === ' ') return;
+      const k = prog(t, 0.7 + i * 0.12, 0.55);
+      if (k <= 0) return;
+      const s = easeOutBack(k);
+      const bob = k >= 1 ? Math.sin(t * 4 + i * 0.8) * 3 : 0;
+      const y = 104 + bob + (1 - k) * 40;
+      ctx.save();
+      ctx.translate(cx, y);
+      ctx.rotate((1 - k) * (i % 2 ? 0.5 : -0.5));
+      ctx.scale(s, s);
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 9;
+      ctx.strokeStyle = '#8e2f86';
+      ctx.strokeText(c, 0, 4);
+      ctx.strokeText(c, 0, 0);
+      ctx.fillStyle = i < 2 ? '#fff36b' : '#ffffff';
+      ctx.fillText(c, 0, 0);
+      ctx.restore();
+    });
+
+    // 부제
+    const k2 = prog(t, 2.0, 0.6);
+    if (k2 > 0) {
+      ctx.globalAlpha = k2;
+      ctx.font = '800 17px ' + FONT;
+      ctx.fillStyle = '#ffd6ec';
+      ctx.fillText('집게로 쏙! 귀여운 동물 친구를 뽑아요', W / 2, 152 + (1 - k2) * 12);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawMachine(t, oy) {
+    ctx.save();
+    ctx.translate(0, oy);
+    let gr = ctx.createLinearGradient(0, MY, 0, MY + MH);
+    gr.addColorStop(0, '#ff86bb');
+    gr.addColorStop(1, '#b955d6');
+    ctx.fillStyle = gr;
+    rr(ctx, MX, MY, MW, MH, 22);
+    ctx.fill();
+
+    // 위쪽 전구
+    const blink = Math.floor(t * 4);
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath();
+      ctx.arc(MX + 30 + i * 20, MY + 18, 4, 0, Math.PI * 2);
+      ctx.fillStyle = (i + blink) % 2 ? '#fff36b' : 'rgba(255,255,255,.5)';
+      ctx.fill();
+    }
+
+    // 안쪽
+    const ih = FLOOR_Y + 10 - IY;
+    gr = ctx.createLinearGradient(0, IY, 0, FLOOR_Y);
+    gr.addColorStop(0, '#d8f0ff');
+    gr.addColorStop(1, '#f6e8ff');
+    ctx.fillStyle = gr;
+    rr(ctx, IX, IY, IW, ih, 10);
+    ctx.fill();
+    ctx.fillStyle = '#c59be8';
+    ctx.fillRect(IX, FLOOR_Y, IW, 10);
+    gr = ctx.createLinearGradient(0, RAIL_Y - 9, 0, RAIL_Y);
+    gr.addColorStop(0, '#e7e9ee');
+    gr.addColorStop(1, '#8d929c');
+    ctx.fillStyle = gr;
+    ctx.fillRect(IX, RAIL_Y - 9, IW, 8);
+
+    // 아래 받침
+    ctx.fillStyle = '#5a2d82';
+    rr(ctx, MX + 14, FLOOR_Y + 14, MW - 28, 20, 7);
+    ctx.fill();
+    ctx.fillStyle = '#ffc61a';
+    ctx.fillRect(W / 2 - 4, FLOOR_Y + 18, 8, 12);
+    ctx.restore();
+  }
+
+  function drawGlass(oy) {
+    ctx.save();
+    ctx.translate(0, oy);
+    const ih = FLOOR_Y + 10 - IY;
+    rr(ctx, IX, IY, IW, ih, 10);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,.18)';
+    ctx.beginPath();
+    ctx.moveTo(230, IY); ctx.lineTo(262, IY); ctx.lineTo(160, FLOOR_Y); ctx.lineTo(128, FLOOR_Y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(0, oy);
+    ctx.strokeStyle = '#7e36a8';
+    ctx.lineWidth = 4;
+    rr(ctx, IX, IY, IW, FLOOR_Y + 10 - IY, 10);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 집게 상태: 줄 길이 · 오므림 · 흔들림 각도
+  function clawState(t) {
+    let L = L_REST;
+    if (t >= 3.6 && t < 4.8) L = lerp(L_REST, L_GRAB, easeInOut(prog(t, 3.6, 1.2)));
+    else if (t >= 4.8 && t < 5.25) L = L_GRAB;
+    else if (t >= 5.25) L = lerp(L_GRAB, L_TOP, easeInOut(prog(t, 5.25, 1.05)));
+    const close = easeInOut(prog(t, 4.8, 0.4));
+
+    // 처음엔 살짝, 뽑아 올린 뒤에는 크게 달랑달랑 (10초 이후에도 계속)
+    let amp;
+    if (t < 3.2) amp = 0.06;
+    else if (t < 3.6) amp = lerp(0.06, 0, prog(t, 3.2, 0.4));
+    else if (t < 6.3) amp = 0;
+    else amp = 0.1 + 0.26 * Math.exp(-(Math.min(t, DURATION) - 6.3) * 0.35) * Math.min(1, (t - 6.3) * 2.5);
+    const phase = t < 3.6 ? t * 3 : (t - 6.3) * 3.4;
+    return { L, close, angle: amp * Math.sin(phase), held: t >= 5.1 };
+  }
+
+  function drawClaw(t, oy, cs) {
+    ctx.save();
+    ctx.translate(PIVOT_X, RAIL_Y + oy);
+    // 레일 위 이동판
+    const gr = ctx.createLinearGradient(0, -13, 0, 3);
+    gr.addColorStop(0, '#c9ced6');
+    gr.addColorStop(1, '#6e737d');
+    ctx.fillStyle = gr;
+    rr(ctx, -17, -13, 34, 15, 5);
+    ctx.fill();
+
+    ctx.rotate(cs.angle);
+    const L = cs.L;
+    ctx.strokeStyle = '#555b66';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, L + 2);
+    ctx.stroke();
+
+    if (cs.held) drawDoll('rabbit', 0, L + 26 + DOLL_R * 0.5, DOLL_R, -cs.angle * 0.6);
+
+    const open = 1 - cs.close;
+    for (const s of [-1, 1]) {
+      ctx.save();
+      ctx.translate(s * 8, L + 12);
+      ctx.rotate(-s * open * 0.45);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(s * 9, 15);
+      ctx.lineTo(s * 5, 28);
+      ctx.lineTo(-s * 3, 33);
+      ctx.strokeStyle = '#6f7480';
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      ctx.strokeStyle = '#dfe3ea';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+    const hub = ctx.createLinearGradient(-15, 0, 15, 0);
+    hub.addColorStop(0, '#9aa0aa');
+    hub.addColorStop(0.45, '#f2f4f7');
+    hub.addColorStop(1, '#8a909a');
+    ctx.fillStyle = hub;
+    rr(ctx, -15, L, 30, 16, 6);
+    ctx.fill();
+    ctx.strokeStyle = '#5d626c';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, L + 8, 3, 0, Math.PI * 2);
+    ctx.fillStyle = Math.floor(t * 5) % 2 ? '#ff4f5e' : '#4cd964';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawDolls(t, oy) {
+    ctx.save();
+    ctx.translate(0, oy);
+    rr(ctx, IX, IY, IW, FLOOR_Y + 10 - IY, 10);
+    ctx.clip();
+    const spacing = 34, x0 = PIVOT_X - spacing * 3;
+    ORDER.forEach((type, i) => {
+      if (i === TARGET && t >= 5.1) return;           // 집게가 집어 갔음
+      const start = 1.5 + i * 0.22;
+      const k = prog(t, start, 0.6);
+      if (k <= 0) return;
+      const y = lerp(IY - 30, DOLL_Y, easeOutBounce(k));
+      const wiggle = k >= 1 ? Math.sin(t * 3 + i) * 0.05 : 0;
+      drawDoll(type, x0 + i * spacing, y, DOLL_R, wiggle);
+    });
+    ctx.restore();
+  }
+
+  // "쏙!" 효과
+  function drawPop(t, oy) {
+    const k = prog(t, 4.95, 0.9);
+    if (k <= 0 || k >= 1) return;
+    ctx.save();
+    ctx.globalAlpha = k < 0.7 ? 1 : 1 - (k - 0.7) / 0.3;
+    ctx.translate(PIVOT_X + 52, DOLL_Y - 30 + oy - k * 20);
+    const s = easeOutBack(Math.min(1, k * 3));
+    ctx.scale(s, s);
+    ctx.font = '900 30px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#e8457f';
+    ctx.strokeText('쏙!', 0, 0);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('쏙!', 0, 0);
+    ctx.restore();
+  }
+
+  // 마지막 '지금 플레이' (깜빡임)
+  const PLAY = { x: W / 2, y: 592, w: 236, h: 62 };
+  function drawPlay(t) {
+    const k = prog(t, 6.8, 0.5);
+    if (k <= 0) return;
+    const on = t < 7.3 || Math.floor((t - 7.3) / 0.4) % 2 === 0;
+    const s = easeOutBack(k) * (on ? 1 + Math.sin(t * 10) * 0.025 : 0.97);
+    ctx.save();
+    ctx.translate(PLAY.x, PLAY.y);
+    ctx.scale(s, s);
+    ctx.globalAlpha = on ? 1 : 0.18;
+    if (on) {
+      ctx.shadowColor = 'rgba(255,224,102,.9)';
+      ctx.shadowBlur = 22;
+    }
+    const gr = ctx.createLinearGradient(0, -PLAY.h / 2, 0, PLAY.h / 2);
+    gr.addColorStop(0, '#ffe066');
+    gr.addColorStop(1, '#ff8a1f');
+    ctx.fillStyle = gr;
+    rr(ctx, -PLAY.w / 2, -PLAY.h / 2, PLAY.w, PLAY.h, PLAY.h / 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#5a2500';
+    ctx.font = '900 30px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('지금 플레이', 0, 2);
+    ctx.restore();
+  }
+
+  function render(t) {
+    ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawBackground(t);
+    drawTitle(t);
+    const oy = (1 - easeOutBack(prog(t, 0, 0.9))) * 480;   // 기계가 아래에서 쑥 올라옴
+    drawMachine(t, oy);
+    drawDolls(t, oy);
+    drawClaw(t, oy, clawState(t));
+    drawGlass(oy);
+    drawPop(t, oy);
+    drawPlay(t);
+  }
+
+  // ---------- 화면 맞추기 · 재생 ----------
+  function fit() {
+    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const cw = Math.floor(W * s), ch = Math.floor(H * s);
+    cv.style.width = cw + 'px';
+    cv.style.height = ch + 'px';
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    cv.width = Math.round(cw * dpr);
+    cv.height = Math.round(ch * dpr);
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  let start = performance.now();
+  // 주소 끝에 #t=8 처럼 붙이면 그 시점부터 볼 수 있음 (확인용)
+  const m = /t=([\d.]+)/.exec(location.hash);
+  if (m) start -= parseFloat(m[1]) * 1000;
+
+  function frame(now) {
+    const t = (now - start) / 1000;
+    render(t);
+    replayBtn.hidden = t < DURATION;
+    cv.style.cursor = t >= 6.8 ? 'pointer' : 'default';
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  replayBtn.addEventListener('click', () => { start = performance.now(); });
+  // '지금 플레이'를 누르면 게임으로 이동
+  cv.addEventListener('click', e => {
+    const t = (performance.now() - start) / 1000;
+    if (t < 6.8) return;
+    const r = cv.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+    if (Math.abs(x - PLAY.x) < PLAY.w / 2 && Math.abs(y - PLAY.y) < PLAY.h / 2) location.href = 'index.html';
+  });
+  document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+})();
+</script>
+</body>
+</html>
